@@ -90,7 +90,7 @@ export class BaseDAO<T extends Object> {
           await this.sqldb.run(this.metaModel.getInsertIntoStatement(subset), this.bindAllInputParams(input, subset));
         } else {
           const res: any = await this.sqldb.run(
-              this.metaModel.getInsertIntoStatement(subset), this.bindNonPrimaryKeyInputParams(input));
+              this.metaModel.getInsertIntoStatement(subset), this.bindNonPrimaryKeyInputParams(input, subset));
           /* istanbul ignore if */
           // tslint:disable-next-line: triple-equals
           if (res.lastID == undefined) {
@@ -207,23 +207,7 @@ export class BaseDAO<T extends Object> {
    * @returns A promise
    */
   public delete(model: T): Promise<void> {
-    return new Promise<void>(async (resolve, reject) => {
-      try {
-        const res =
-            await this.sqldb.run(this.metaModel.getDeleteByIdStatement(), this.bindPrimaryKeyInputParams(model));
-        if (!res.changes) {
-          reject(new Error(`delete from '${this.table.name}' failed: nothing changed`));
-          return;
-        }
-      } catch (e) {
-        // NOTE: should not happen
-        /* istanbul ignore next */
-        reject(new Error(`delete from '${this.table.name}' failed: ${e.message}`));
-        /* istanbul ignore next */
-        return;
-      }
-      resolve();
-    });
+    return this.deleteById(model);
   }
 
   /**
