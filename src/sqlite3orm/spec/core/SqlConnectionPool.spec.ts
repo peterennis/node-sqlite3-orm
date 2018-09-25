@@ -1,4 +1,6 @@
 // tslint:disable prefer-const max-classes-per-file no-unused-variable no-unnecessary-class
+// tslint:disable no-non-null-assertion
+
 import {
   SQL_MEMORY_DB_SHARED,
   SQL_OPEN_DEFAULT,
@@ -56,10 +58,11 @@ describe('test SqlConnectionPool', () => {
   });
 
 
-  it('expect pool to be able to open a (file-)database', async (done) => {
+  it('expect pool to share a file-database', async (done) => {
     try {
       let pool = new SqlConnectionPool();
-      await pool.open('testsqlite3.db', SQL_OPEN_DEFAULT, 1, 2);
+      const fileName = 'testsqlite3.db';
+      await pool.open(fileName, SQL_OPEN_DEFAULT, 2, 2);
       expect(pool.isOpen()).toBeTruthy();
 
       // getting first connection
@@ -82,13 +85,13 @@ describe('test SqlConnectionPool', () => {
       expect(sqldb3).toBeUndefined();
 
       // first connection should work
-      let ver1 = await sqldb1.getUserVersion();
+      const ver0 = await sqldb1.getUserVersion();
 
-      ver1 += 3;
+      const ver1 = ver0 + 3;
       await sqldb1.setUserVersion(ver1);
 
       // second connection should work
-      let ver2 = await sqldb2.getUserVersion();
+      const ver2 = await sqldb2.getUserVersion();
       expect(ver2).toBe(ver1, 'got wrong user version from connection 2');
 
       // closing one connection
@@ -102,7 +105,7 @@ describe('test SqlConnectionPool', () => {
       expect(sqldb3 !== sqldb2).toBeTruthy('got same connection instance from pool');
 
       // third connection should work
-      let ver3 = await sqldb3.getUserVersion();
+      const ver3 = await sqldb3.getUserVersion();
       expect(ver3).toBe(ver1, 'got wrong user version from connection 3');
 
       await sqldb1.close();
@@ -110,6 +113,102 @@ describe('test SqlConnectionPool', () => {
       await sqldb3.close();
       await pool.close();
       expect(pool.isOpen()).toBeFalsy();
+
+      await pool.open(fileName, SQL_OPEN_DEFAULT, 2, 2);
+      expect(pool.isOpen()).toBeTruthy();
+
+      sqldb1 = await pool.get(100);
+
+      const ver4 = await sqldb1.getUserVersion();
+      expect(ver4).toBe(ver3, 'user version after reopening pool to file db');
+
+      await sqldb1.close();
+      await pool.close();
+      expect(pool.isOpen()).toBeFalsy();
+
+    } catch (err) {
+      fail(err);
+    }
+    done();
+
+  });
+
+
+  it('expect pool to share a memory-database', async (done) => {
+    try {
+      let pool = new SqlConnectionPool();
+      await pool.open(SQL_MEMORY_DB_SHARED, SQL_OPEN_DEFAULT, 2, 2);
+      expect(pool.isOpen()).toBeTruthy();
+
+      // getting first connection
+      let sqldb1 = await pool.get(100);
+      expect(sqldb1).toBeDefined();
+      expect(sqldb1.isOpen()).toBeTruthy();
+
+      // getting second connection
+      let sqldb2 = await pool.get(100);
+      expect(sqldb2).toBeDefined();
+      expect(sqldb2.isOpen()).toBeTruthy();
+
+      // getting third connect should fail
+      let sqldb3: SqlDatabase|undefined;
+      try {
+        sqldb3 = await pool.get(100);
+        fail('got 3 connection from pool with max 2 connections');
+      } catch (ignore) {
+      }
+      expect(sqldb3).toBeUndefined();
+
+      // first connection should work
+      const ver0 = await sqldb1.getUserVersion();
+
+      const ver1 = ver0 + 3;
+      await sqldb1.setUserVersion(ver1);
+
+      // second connection should work
+      const ver2 = await sqldb2.getUserVersion();
+      expect(ver2).toBe(ver1, 'got wrong user version from connection 2');
+
+      // closing one connection
+      await sqldb2.close();
+      expect(sqldb2.isOpen()).toBeFalsy('closed connection 2 is open');
+
+      // getting third connect should succeed
+      sqldb3 = await pool.get(100);
+      expect(sqldb3).toBeDefined();
+      expect(sqldb3.isOpen()).toBeTruthy();
+      expect(sqldb3 !== sqldb2).toBeTruthy('got same connection instance from pool');
+
+      // third connection should work
+      const ver3 = await sqldb3.getUserVersion();
+      expect(ver3).toBe(ver1, 'got wrong user version from connection 3');
+
+      await sqldb1.close();
+      await sqldb2.close();
+      await sqldb3.close();
+      await pool.close();
+      expect(pool.isOpen()).toBeFalsy();
+
+
+      /*
+
+      // sqlite3 URI format support is required to support shared memory db
+      // otherwise the opened database is a persisted on the file system
+      // see doc/build-node-sqlite3.md
+
+      await pool.open(SQL_MEMORY_DB_SHARED, SQL_OPEN_DEFAULT, 2, 2);
+      expect(pool.isOpen()).toBeTruthy();
+
+      sqldb1 = await pool.get(100);
+
+      const ver4 = await sqldb1.getUserVersion();
+      expect(ver4).toBe(ver0, 'user version after reopening pool connected to memory db');
+
+      await sqldb1.close();
+      await pool.close();
+      expect(pool.isOpen()).toBeFalsy();
+      */
+
 
     } catch (err) {
       fail(err);
@@ -156,6 +255,123 @@ describe('test SqlConnectionPool', () => {
     }
 
   });
+
+  it('expect opening pool multiple times (using same file and mode) to succeed', async (done) => {
+    const pool = new SqlConnectionPool();
+    try {
+      await Promise.all([
+        pool.open(SQL_MEMORY_DB_SHARED, SQL_OPEN_DEFAULT, 3),
+        pool.open(SQL_MEMORY_DB_SHARED, SQL_OPEN_DEFAULT, 3),
+        pool.open(SQL_MEMORY_DB_SHARED, SQL_OPEN_DEFAULT, 3),
+      ]);
+    } catch (err) {
+      fail(err);
+    }
+    expect(pool.isOpen()).toBeTruthy();
+    done();
+  });
+
+
+  it('expect opening pool multiple times (using different files) to fail', async (done) => {
+    const pool = new SqlConnectionPool();
+    try {
+      await Promise.all([
+        pool.open('test1.db', SQL_OPEN_DEFAULT, 3),
+        pool.open('test2.db', SQL_OPEN_DEFAULT, 3),
+        pool.open('test3.db', SQL_OPEN_DEFAULT, 3),
+      ]);
+    } catch (err) {
+      fail(err);
+    }
+    // the last one wins ( same as running sequential )
+    expect(pool.isOpen()).toBeTruthy();
+    done();
+  });
+
+
+  it('getting connections from pool having max-limit should work', async (done) => {
+    const pool = new SqlConnectionPool();
+    let conn1: SqlDatabase|undefined;
+    let conn2: SqlDatabase|undefined;
+    try {
+      await pool.open(SQL_MEMORY_DB_SHARED, SQL_OPEN_DEFAULT, 1, 1);
+      expect(pool.isOpen()).toBeTruthy();
+      conn1 = await pool.get(100);
+    } catch (err) {
+      fail(err);
+    }
+
+    try {
+      conn2 = await pool.get(200);
+      fail('getting second connection from pool having max==2 should have thrown');
+    } catch (err) {
+    }
+
+    try {
+      await Promise.all([
+        pool.get(500).then((conn) => {
+          conn2 = conn;
+        }),
+        conn1!.close()
+      ]);
+    } catch (err) {
+      fail(err);
+    }
+    expect(conn2).toBeDefined();
+
+    done();
+  });
+
+  it('getting connections from pool without max-limit should succeed', async (done) => {
+    const pool = new SqlConnectionPool();
+    try {
+      await pool.open(SQL_MEMORY_DB_SHARED, SQL_OPEN_DEFAULT, 1);
+    } catch (err) {
+      fail(err);
+    }
+    expect(pool.isOpen()).toBeTruthy();
+
+    try {
+      const conn1 = await pool.get(100);
+      const conn2 = await pool.get(100);
+      const conn3 = await pool.get(100);
+      await conn3.close();
+      await conn2.close();
+      await conn1.close();
+    } catch (err) {
+      fail(err);
+    }
+    done();
+  });
+
+
+  it('closing pool having connections in use should succeed', async (done) => {
+    const pool = new SqlConnectionPool();
+    let conn1: SqlDatabase|undefined;
+    let conn2: SqlDatabase|undefined;
+    try {
+      await pool.open(SQL_MEMORY_DB_SHARED, SQL_OPEN_DEFAULT, 1, 2);
+      expect(pool.isOpen()).toBeTruthy();
+      conn1 = await pool.get(100);
+      conn2 = await pool.get(100);
+    } catch (err) {
+      fail(err);
+    }
+
+    try {
+      await conn1!.close();
+      await pool.close();
+    } catch (err) {
+      fail(err);
+    }
+
+    expect(pool.isOpen()).toBeFalsy();
+    expect(conn1!.isOpen()).toBeFalsy();
+    expect(conn2!.isOpen()).toBeFalsy();
+    done();
+  });
+
+
 
 });
 

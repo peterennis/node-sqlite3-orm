@@ -4,7 +4,7 @@ import * as _dbg from 'debug';
 import {SqlDatabase} from './core/SqlDatabase';
 import {DbCatalogDAO, DbTableInfo} from './dbcatalog';
 import {Field, FKDefinition, schema, Table} from './metadata';
-import {PromiseFactories, qualifiyIdentifier, quoteIdentifier, sequentialize} from './utils';
+import {PromiseFactories, qualifiySchemaIdentifier, quoteIdentifier, sequentialize} from './utils';
 
 const debug = _dbg('sqlite3orm:autoupgrade');
 
@@ -65,12 +65,7 @@ export class AutoUpgrader {
     // upgrade tables
     try {
       if (Array.isArray(tables)) {
-        const factories: PromiseFactories<void> = [];
-        tables.forEach((table) => {
-          factories.push(() => this._upgradeTable(table, opts));
-        });
-
-        await sequentialize(factories);
+        await sequentialize(tables.map((table) => () => this._upgradeTable(table, opts)));
 
       } else {
         await this._upgradeTable(tables, opts);
@@ -176,7 +171,6 @@ export class AutoUpgrader {
         return {tableInfo, opts, upgradeMode: UpgradeMode.RECREATE};
       }
     }
-    // tslint:enable cyclomatic-complexity
 
     // test if primary key columns are equal, otherwise return UpgradeMode.RECREATE
     if (table.mapNameToIdentityField.size !== tableInfo.primaryKey.length) {
@@ -195,6 +189,12 @@ export class AutoUpgrader {
       }
     }
 
+    // test if autoIncrement is equal, otherwise return UpgradeMode.RECREATE
+    if (table.autoIncrementField && !tableInfo.autoIncrement || !table.autoIncrementField && tableInfo.autoIncrement) {
+      debug(`  autoIncrement changed`);
+      return {tableInfo, opts, upgradeMode: UpgradeMode.RECREATE};
+    }
+
     // test if no column needs to be added, otherwise return UpgradeMode.ALTER
     if ((Object.keys(tableInfo.columns).length - oldColumnsCount) !== table.fields.length) {
       debug(`  column(s) added`);
@@ -207,7 +207,7 @@ export class AutoUpgrader {
       return {tableInfo, opts, upgradeMode: UpgradeMode.ALTER};
     }
     for (const name of Object.keys(tableInfo.indexes)) {
-      const idx = table.mapNameToIDXDef.get(qualifiyIdentifier(name));
+      const idx = table.mapNameToIDXDef.get(qualifiySchemaIdentifier(name, tableInfo.schemaName));
       if (!idx) {
         debug(`  index '${name}' dropped`);
         return {tableInfo, opts, upgradeMode: UpgradeMode.ALTER};
@@ -222,6 +222,7 @@ export class AutoUpgrader {
       }
     }
 
+    // tslint:enable cyclomatic-complexity
     return {tableInfo, opts, upgradeMode: UpgradeMode.ACTUAL};
   }
 
@@ -259,7 +260,7 @@ export class AutoUpgrader {
     debug(`  => create table`);
 
     // create table
-    factories.push(() => this.sqldb.exec(table.getCreateTableStatement()));
+    factories.push(() => this.sqldb.exec(table.getCreateTableStatement(true)));
 
     // create all indexes
     table.mapNameToIDXDef.forEach((idx) => {
@@ -289,7 +290,7 @@ export class AutoUpgrader {
 
     // drop indexes
     Object.keys(tableInfo.indexes).forEach((name) => {
-      const idx = table.mapNameToIDXDef.get(qualifiyIdentifier(name));
+      const idx = table.mapNameToIDXDef.get(qualifiySchemaIdentifier(name, tableInfo.schemaName));
       if (!idx) {
         debug(`  => drop index '${name}'`);
         factories.push(() => this.sqldb.exec(`DROP INDEX IF EXISTS ${quoteIdentifier(name)}`));
@@ -356,7 +357,7 @@ export class AutoUpgrader {
     factories.push(() => this.sqldb.exec(`ALTER TABLE ${table.quotedName} RENAME TO ${tmpTableName}`));
 
     // create table
-    factories.push(() => this.sqldb.exec(table.createCreateTableStatement(addFields)));
+    factories.push(() => this.sqldb.exec(table.createCreateTableStatement(true, addFields)));
 
     // data transfer
     let colNames;

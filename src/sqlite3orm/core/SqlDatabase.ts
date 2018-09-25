@@ -4,7 +4,6 @@
 import * as _dbg from 'debug';
 import {Database, OPEN_CREATE, OPEN_READONLY, OPEN_READWRITE, Statement, verbose as sqlverbose} from 'sqlite3';
 
-import {SqlConnectionPool} from './SqlConnectionPool';
 import {SqlDatabaseSettings} from './SqlDatabaseSettings';
 import {SqlRunResult, SqlStatement} from './SqlStatement';
 
@@ -12,27 +11,17 @@ export const SQL_OPEN_READONLY = OPEN_READONLY;
 export const SQL_OPEN_READWRITE = OPEN_READWRITE;
 export const SQL_OPEN_CREATE = OPEN_CREATE;
 
-export const SQL_MEMORY_DB_SHARED = 'file:sqlite3orm?mode=memory&cache=shared';
-export const SQL_MEMORY_DB_PRIVATE = ':memory:';
 export const SQL_DEFAULT_SCHEMA = 'main';
 
+export const SQL_MEMORY_DB_PRIVATE = ':memory:';
+
+// shared memory database is currently not supported by node-sqlite3
+//   see: https://github.com/mapbox/node-sqlite3/issues/710
+// but can be enabled by building node-sqlite3 and sqlite3 from source
+// see docs/enable-URI.md
+export const SQL_MEMORY_DB_SHARED = 'file:sqlite3orm?mode=memory&cache=shared';
+
 const debug = _dbg('sqlite3orm:database');
-
-
-// NOTE:
-// our tests defined in 'SqlDatabase.spec.ts' are working fine using
-// private-cache mode:
-//   export const SQL_MEMORY_DB_PRIVATE = ':memory:';
-//   export const SQL_MEMORY_DB_PRIVATE = 'file::memory:?cache=off';
-// but failing, if private-cache mode is explicitly defined:
-//   export const SQL_MEMORY_DB_PRIVATE = 'file::memory:?cache=private';
-// could it be, that the last URI opens the memory in shared-cache mode?
-// but even running jasmine using `jasmine /path/to/Database.spec.js` works as
-// expected,
-// only if jasmine is called without any spec.js, these tests are failing in the
-// 'beforeAll' function, with:
-//   Error: SQLITE_ERROR: table TEST already exists
-//   Error: SQLITE_CONSTRAINT: UNIQUE constraint failed: TEST.id
 
 // tslint:disable-next-line: no-bitwise
 export const SQL_OPEN_DEFAULT = SQL_OPEN_READWRITE | SQL_OPEN_CREATE;
@@ -50,11 +39,12 @@ export const SQL_OPEN_DEFAULT = SQL_OPEN_READWRITE | SQL_OPEN_CREATE;
  * @class SqlDatabase
  */
 export class SqlDatabase {
-  private static lastId: number = 0;
+  protected static lastId: number = 0;
 
-  private db?: Database;
-  private dbId?: number;
-  private pool?: SqlConnectionPool;
+  protected db?: Database;
+  protected dbId?: number;
+
+  dirty?: boolean;
 
   /**
    * Creates an instance of SqlDatabase.
@@ -66,16 +56,11 @@ export class SqlDatabase {
    * Open a database connection
    *
    * @param databaseFile - The path to the database file or URI
-   * filename (see SQL_MEMORY_DB_SHARED/SQL_MEMORY_DB_PRIVATE for an in-memory
-   * database)
    * @param [mode=SQL_OPEN_DEFAULT] - A bit flag combination of: SQL_OPEN_CREATE |
    * SQL_OPEN_READONLY | SQL_OPEN_READWRITE
    * @returns A promise
    */
   public async open(databaseFile: string, mode?: number, settings?: SqlDatabaseSettings): Promise<void> {
-    if (this.pool) {
-      await this.pool.release(this);
-    }
     return new Promise<void>((resolve, reject) => {
              const db = new Database(databaseFile, mode || SQL_OPEN_DEFAULT, (err) => {
                if (err) {
@@ -103,9 +88,6 @@ export class SqlDatabase {
    * @returns {Promise<void>}
    */
   public close(): Promise<void> {
-    if (this.pool) {
-      return this.pool.release(this);
-    }
     return new Promise<void>((resolve, reject) => {
       if (!this.db) {
         resolve();
@@ -391,13 +373,6 @@ ${sql}`);
    * @param event
    * @param listener
    */
-  public on(event: 'open', listener: () => void): this;
-  /**
-   *
-   *
-   * @param event
-   * @param listener
-   */
   public on(event: 'close', listener: () => void): this;
   /**
    *
@@ -546,87 +521,5 @@ ${sql}`);
    */
   public static verbose(): void {
     sqlverbose();
-  }
-
-  /*
-  @internal
-  */
-  public openByPool(pool: SqlConnectionPool, databaseFile: string, mode?: number, settings?: SqlDatabaseSettings):
-      Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-             const db = new Database(databaseFile, mode || SQL_OPEN_DEFAULT, (err) => {
-               if (err) {
-                 reject(err);
-               } else {
-                 this.pool = pool;
-                 this.db = db;
-                 this.dbId = SqlDatabase.lastId++;
-                 debug(`${this.dbId}: opened`);
-                 resolve();
-               }
-             });
-           })
-        .then((): Promise<void> => {
-          if (settings) {
-            return this.applySettings(settings);
-          }
-          return Promise.resolve();
-        });
-  }
-
-  /*
-  @internal
-  */
-  public closeByPool(): Promise<void> {
-    this.pool = undefined;
-    return new Promise<void>((resolve, reject) => {
-      if (!this.db) {
-        resolve();
-      } else {
-        const db = this.db;
-        debug(`${this.dbId}: close`);
-        this.db = undefined;
-        this.dbId = undefined;
-        db.close((err) => {
-          db.removeAllListeners();
-          if (err) {
-            reject(err);
-          } else {
-            resolve();
-          }
-        });
-      }
-    });
-  }
-
-  /*
-  @internal
-  */
-  public async recycleByPool(pool: SqlConnectionPool, sqldb: SqlDatabase, settings?: SqlDatabaseSettings):
-      Promise<void> {
-    if (sqldb.db) {
-      sqldb.db.removeAllListeners();
-      // move
-      this.db = sqldb.db;
-      this.dbId = sqldb.dbId;
-      this.pool = pool;
-      // reapply default settings
-      if (settings) {
-        try {
-          await this.applySettings(settings);
-        } catch (err) {
-        }
-      }
-    }
-    sqldb.db = undefined;
-    sqldb.dbId = undefined;
-    sqldb.pool = undefined;
-  }
-
-  /*
-  @internal
-  */
-  public getPool(): SqlConnectionPool|undefined {
-    return this.pool;
   }
 }

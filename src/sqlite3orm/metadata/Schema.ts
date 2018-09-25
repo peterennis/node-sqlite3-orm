@@ -1,9 +1,10 @@
 // import * as core from './core';
 
-import {Table} from './Table';
-import {TableOpts} from './decorators';
 import {SqlDatabase} from '../core';
-import {qualifiyIdentifier} from '../utils';
+import {qualifiySchemaIdentifier} from '../utils';
+
+import {TableOpts} from './decorators';
+import {Table} from './Table';
 
 /**
  * A singleton holding the database schema definitions
@@ -53,7 +54,7 @@ export class Schema {
    */
 
   public hasTable(name: string): Table|undefined {
-    return this.mapNameToTable.get(qualifiyIdentifier(name));
+    return this.mapNameToTable.get(qualifiySchemaIdentifier(name));
   }
 
   /**
@@ -63,7 +64,7 @@ export class Schema {
    * @returns The table definition
    */
   public getTable(name: string): Table {
-    const table = this.mapNameToTable.get(qualifiyIdentifier(name));
+    const table = this.mapNameToTable.get(qualifiySchemaIdentifier(name));
     if (!table) {
       throw new Error(`table '${name}' not registered yet`);
     }
@@ -77,7 +78,7 @@ export class Schema {
    * @returns The table definition
    */
   public getOrAddTable(name: string, opts: TableOpts): Table {
-    const qname = qualifiyIdentifier(name);
+    const qname = qualifiySchemaIdentifier(name);
     let table = this.mapNameToTable.get(qname);
 
     if (!table) {
@@ -121,7 +122,7 @@ export class Schema {
    * @param table - The table definition
    */
   public deleteTable(name: string): void {
-    this.mapNameToTable.delete(qualifiyIdentifier(name));
+    this.mapNameToTable.delete(qualifiySchemaIdentifier(name));
   }
 
   /**
@@ -140,9 +141,9 @@ export class Schema {
    * @param name - The name of the table
    * @returns A promise
    */
-  public createTable(sqldb: SqlDatabase, name: string): Promise<void> {
+  public createTable(sqldb: SqlDatabase, name: string, force?: boolean): Promise<void> {
     const table = this.getTable(name);
-    return sqldb.exec(table.getCreateTableStatement());
+    return sqldb.exec(table.getCreateTableStatement(force));
   }
 
   /**

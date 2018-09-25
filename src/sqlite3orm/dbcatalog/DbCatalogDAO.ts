@@ -1,6 +1,6 @@
-import {SqlDatabase} from '../core';
+import {SQL_DEFAULT_SCHEMA, SqlDatabase} from '../core';
 import {FKDefinition} from '../metadata';
-import {quoteAndSplitIdentifiers, quoteSimpleIdentifier} from '../utils';
+import {quoteSimpleIdentifier, splitSchemaIdentifier} from '../utils';
 
 import {DbColumnInfo, DbForeignKeyInfo, DbIndexColumnInfo, DbIndexInfo, DbTableInfo} from './DbTableInfo';
 
@@ -28,17 +28,48 @@ export class DbCatalogDAO {
     });
   }
 
-  async readTableInfo(fullTableName: string): Promise<DbTableInfo|undefined> {
+  async readTableInfo(tableName: string, schemaName?: string): Promise<DbTableInfo|undefined> {
     try {
-      const {identName, identSchema} = quoteAndSplitIdentifiers(fullTableName);
-      const tableInfo = await this.callSchemaPragma('table_info', identName, identSchema);
+      const {identName, identSchema} = splitSchemaIdentifier(tableName);
+      tableName = identName;
+      schemaName = identSchema || schemaName || SQL_DEFAULT_SCHEMA;
+
+      const quotedName = quoteSimpleIdentifier(tableName);
+      const quotedSchema = quoteSimpleIdentifier(schemaName);
+
+      // TODO: sqlite3 issue regarding schema queries from multiple connections
+      // The result of table_info seems to be somehow cached, so subsequent calls to table_info may return wrong results
+      // The scenario where this problem was detected:
+      //    connection 1:   PRAGMA table_info('FOO_TABLE') => ok (no data)
+      //    connection 2:   PRAGMA table_info('FOO_TABLE') => ok (no data)
+      //    connection 2:   CREATE TABLE FOO_TABLE (...)
+      //    connection 3:   PRAGMA table_info('FOO_TABLE') => ok (data)
+      //    connection 2:   PRAGMA table_info('FOO_TABLE') => ok (data)
+      //    connection 1:   PRAGMA table_info('FOO_TABLE') => NOT OK (NO DATA)
+      // known workarounds:
+      //    1) perform all schema discovery and schema modifications from the same connection
+      //    2) if using a connection pool, do not recycle a connection after performing schema queries
+      //    3) not verified yet: using shared cache
+
+      //  workaround for issue described above (required by e.g 'loopback-connector-sqlite3x')
+      this.sqldb.dirty = true;
+
+      const tableInfo = await this.callSchemaQueryPragma('table_info', quotedName, quotedSchema);
       if (tableInfo.length === 0) {
         return undefined;
       }
-      const idxList = await this.callSchemaPragma('index_list', identName, identSchema);
-      const fkList = await this.callSchemaPragma('foreign_key_list', identName, identSchema);
+      const idxList = await this.callSchemaQueryPragma('index_list', quotedName, quotedSchema);
+      const fkList = await this.callSchemaQueryPragma('foreign_key_list', quotedName, quotedSchema);
 
-      const info: DbTableInfo = {name: fullTableName, columns: {}, primaryKey: [], indexes: {}, foreignKeys: {}};
+      const info: DbTableInfo = {
+        name: `${schemaName}.${tableName}`,
+        tableName,
+        schemaName,
+        columns: {},
+        primaryKey: [],
+        indexes: {},
+        foreignKeys: {}
+      };
 
 
       tableInfo.sort((colA, colB) => colA.pk - colB.pk).forEach((col) => {
@@ -55,12 +86,28 @@ export class DbCatalogDAO {
         }
       });
 
+      if (info.primaryKey.length === 1 && info.columns[info.primaryKey[0]].typeAffinity === 'INTEGER') {
+        // dirty hack to check if this column is autoincrementable
+        // not checked: if autoincrement is part of column/index/foreign key name
+        // not checked: if autoincrement is part of default literal text
+        // however, test is sufficient for autoupgrade
+        const schema = quotedSchema || '"main"';
+        const res = await this.sqldb.all(
+            `select * from ${
+                             schema
+                           }.sqlite_master where type='table' and name=:tableName and UPPER(sql) like '%AUTOINCREMENT%'`,
+            {':tableName': tableName});
+        if (res && res.length === 1) {
+          info.autoIncrement = true;
+        }
+      }
+
       const promises: Promise<DbIndexInfo>[] = [];
       idxList.forEach((idx) => {
         if (idx.origin !== 'pk') {
           promises.push(new Promise((resolve, reject) => {
             const idxInfo: DbIndexInfo = {name: idx.name, unique: !!idx.unique, partial: !!idx.partial, columns: []};
-            this.callSchemaPragma('index_xinfo', quoteSimpleIdentifier(idx.name), identSchema)
+            this.callSchemaQueryPragma('index_xinfo', quoteSimpleIdentifier(idx.name), quotedSchema)
                 .then((xinfo) => {
                   xinfo.sort((idxColA, idxColB) => idxColA.seqno - idxColB.seqno).forEach((idxCol) => {
                     if (idxCol.cid >= 0) {
@@ -81,6 +128,9 @@ export class DbCatalogDAO {
         info.indexes[idxInfo.name] = idxInfo;
       });
 
+      // NOTE: because we are currently not able to discover the FK constraint name
+      // (not reported by 'foreign_key_list' pragma)
+      // we are currently using a 'genericForeignKeyId' here, which is readable, but does not look like an identifier
       let lastId: number;
       let lastFk: any;
       let fromCols: string[] = [];
@@ -117,16 +167,9 @@ export class DbCatalogDAO {
     }
   }
 
-  protected schemaPragma(pragmaName: string, identifierName: string, identifierSchema?: string): string {
-    if (identifierSchema) {
-      return `${identifierSchema}.${pragmaName}(${identifierName})`;
-    } else {
-      return `${pragmaName}(${identifierName})`;
-    }
-  }
-
-  protected callSchemaPragma(pragmaName: string, identifierName: string, identifierSchema?: string): Promise<any[]> {
-    return this.sqldb.all(`PRAGMA ${this.schemaPragma(pragmaName, identifierName, identifierSchema)}`);
+  protected callSchemaQueryPragma(pragmaName: string, identifierName: string, identifierSchema: string):
+      Promise<any[]> {
+    return this.sqldb.all(`PRAGMA ${identifierSchema}.${pragmaName}(${identifierName})`);
   }
 
 
