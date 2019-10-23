@@ -1,6 +1,6 @@
 {
   "name": "sqlite3orm",
-  "version": "2.4.12",
+  "version": "2.4.13",
   "description": "ORM for sqlite3 and TypeScript/JavaScript",
   "main": "./index.js",
   "types": "./index.d.ts",
@@ -31,10 +31,10 @@
     "build": "tsc -p tsconfig.json",
     "rebuild": "npm run clean && npm run build",
     "lint": "tslint -p tsconfig.json -c tslint.json",
-    "test:run": "node spec/jasmine-runner.js",
+    "test:run": "jasmine-ts",
     "test": "npm run rebuild && npm run test:run",
     "watch": "tsc -w -p tsconfig.json",
-    "coverage:run": "nyc -e .ts -x \"**/*.spec.*\" jasmine-ts \"./src/**/*.spec.ts\"",
+    "coverage:run": "nyc -e .ts -x \"**/*.spec.ts\" -x \"src/sqlite3orm/spec/**/*\" jasmine-ts",
     "coverage:report": "nyc report --reporter=text-lcov",
     "coverage:html": "nyc report --reporter=html",
     "coverage:coveralls": "nyc report --reporter=text-lcov | coveralls",
@@ -53,23 +53,23 @@
     "sqlite3": "^4.1.0"
   },
   "devDependencies": {
-    "@compodoc/compodoc": "^1.1.10",
+    "@compodoc/compodoc": "^1.1.11",
     "@types/debug": "4.1.5",
-    "@types/fs-extra": "^8.0.0",
-    "@types/jasmine": "^3.4.1",
-    "@types/node": "^12.7.8",
+    "@types/fs-extra": "^8.0.1",
+    "@types/jasmine": "^3.4.4",
+    "@types/node": "^12.11.2",
     "@types/sqlite3": "^3.1.5",
-    "coveralls": "^3.0.6",
+    "coveralls": "^3.0.7",
     "fs-extra": "^8.1.0",
     "jasmine": "^3.5.0",
     "jasmine-spec-reporter": "^4.2.1",
     "jasmine-ts": "^0.3.0",
-    "nyc": "^14.1.1",
+    "nyc": "^13.3.0",
     "prettier": "^1.18.2",
     "rimraf": "^3.0.0",
     "ts-node": "^8.4.1",
     "tslint": "^5.20.0",
-    "typescript": "^3.6.3"
+    "typescript": "^3.6.4"
   },
   "typescript": {
     "definition": "./index.d.ts"
